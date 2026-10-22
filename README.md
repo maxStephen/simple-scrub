@@ -35,22 +35,22 @@ python3 scrub.py <input_file> --terms <terms_file> [options]
 
 ```bash
 # Scrub a single term
-python3 scrub.py report.pdf --scrub "Goodyear"
+python3 scrub.py report.pdf --scrub "Acme Corp"
 
 # Scrub multiple terms inline
-python3 scrub.py report.pdf --scrub "Goodyear" --scrub "John Smith" --scrub "secret@email.com"
+python3 scrub.py report.pdf --scrub "Acme Corp" --scrub "John Smith" --scrub "secret@email.com"
 
 # Scrub using a terms file
 python3 scrub.py report.pdf --terms terms.txt
 
 # Combine inline terms and a terms file
-python3 scrub.py report.pdf --scrub "Goodyear" --terms terms.txt
+python3 scrub.py report.pdf --scrub "Acme Corp" --terms terms.txt
 
 # Use a custom replacement string
-python3 scrub.py report.pdf --scrub "Goodyear" --replacement "[REDACTED]"
+python3 scrub.py report.pdf --scrub "Acme Corp" --replacement "[REDACTED]"
 
 # Write output to a different directory
-python3 scrub.py report.pdf --scrub "Goodyear" --output-dir ./scrubbed/
+python3 scrub.py report.pdf --scrub "Acme Corp" --output-dir ./scrubbed/
 ```
 
 ## Terms file format
@@ -59,7 +59,7 @@ One sensitive string per line. Lines starting with `#` and blank lines are ignor
 
 ```
 # terms.txt
-Goodyear
+Acme Corp
 John Smith
 secret@email.com
 ```
@@ -69,14 +69,20 @@ secret@email.com
 The scrubbed file is written alongside the original (or to `--output-dir`), with all sensitive strings replaced in the filename too:
 
 ```
-goodyear-john-smith-report.pdf  →  dummy-dummy-report.pdf
+Acme Corp John Smith report.pdf  →  dummy dummy report.pdf
 ```
 
 The script prints a summary on completion:
 
 ```
-Wrote:                dummy-dummy-report.pdf
+Wrote:                dummy dummy report.pdf
 Terms scrubbed:       2
 Content replacements: 23
 Filename changed:     True
 ```
+
+## Changelog
+
+### v0.2.0
+
+- Updated README examples to use generic placeholder terms.
