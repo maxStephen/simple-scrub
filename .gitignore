@@ -4,3 +4,5 @@ acme_corp_report.pdf
 terms.txt
 to_scrub/
 scrubbed/
+.venv/
+__pycache__/
