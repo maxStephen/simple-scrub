@@ -136,10 +136,44 @@ Filename changed:     True
 ## Tests
 
 ```bash
-.venv/bin/python tests/test_detectors.py
+.venv/bin/pip install -r requirements-dev.txt     # fixture builders only
+.venv/bin/python tests/run_all.py
 ```
 
+| Script | Covers |
+|---|---|
+| `test_detectors.py` | Hand-picked detector cases, version strings, `--keep`, `--keep-pci` |
+| `test_detector_volume.py` | Recall over 1,000 generated IDs per family, numbers, IPv4/IPv6; 2,000 version strings must survive; false-positive rate on stdlib code |
+| `test_robustness.py` | Latin-1/UTF-8 BOM/UTF-16 text, unicode names, empty/corrupt/encrypted files, name collisions, refusing to overwrite the input |
+| `test_warnings.py` | Every warning fires (embedded objects, EMF, undecodable image, term left in a sheet name or zip entry, PDF annotations/attachments) and clean files do not warn |
+
+This is a "pretty good" suite, not a complete one. Known gaps are listed below.
+
+## Known gaps
+
+- **An ID that wraps across two lines in a PDF is missed silently** (neither half reaches the 24-character minimum, and nothing warns). Likely in narrow table cells.
+- **Keys shorter than 24 characters** (for example a 20-character `AKIA…` access key) are not detected; lower `--min-id-length` and expect more false positives. Numbers of 12 digits or fewer are also left alone by design.
+- Detector false-positive rate on code is about 2 hits per 1,000 lines (hashes in URLs, alphabet constants). Review with `--dry-run`.
+
+## Test roadmap (not yet written)
+
+1. **Independent leak check.** Our rescans reuse the tool's own detectors and OCR, so they share its blind spots. Add a different oracle: unzip Office files and grep every part, grep decompressed PDF streams, OCR with other settings.
+2. **The original is never modified.** Hash the input before and after.
+3. **`--dry-run` writes nothing.** Compare the output directory before and after.
+4. **PyMuPDF drift regression.** Assert that words untouched by a multi-redaction line keep their x-positions (guards the `pymupdf<2` pin).
+5. **CLI behaviour matrix.** Flag combinations, exit codes, terms-file parsing, regex characters in terms, overlapping terms.
+6. **OCR on realistic images.** Small UI fonts, dark mode, low contrast, JPEG noise, rotation; measure the miss rate.
+7. **Real Office features.** Headers/footers, footnotes, text boxes, tracked changes, comments, hyperlinks, charts, hidden sheets.
+8. **Open outputs in real applications** (Word, Excel, PowerPoint or LibreOffice), not just python-docx/openpyxl/python-pptx, which are lenient.
+9. **Scale.** Large multi-page PDFs and OCR run time.
+
 ## Changelog
+
+### v0.4.1
+
+- Text files keep their encoding (UTF-8, UTF-8 BOM, UTF-16, Latin-1) and line endings; previously non-UTF-8 files crashed.
+- Corrupt, empty or unreadable inputs now fail with a one-line message, no traceback, and no partial output.
+- Added robustness, warning-path and detector-volume tests, a test runner and `requirements-dev.txt`; documented known gaps and a test roadmap.
 
 ### v0.4.0
 

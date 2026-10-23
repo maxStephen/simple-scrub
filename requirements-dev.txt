@@ -1,0 +1,4 @@
+python-docx
+python-pptx
+openpyxl
+piexif

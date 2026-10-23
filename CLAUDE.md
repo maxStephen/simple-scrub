@@ -34,6 +34,12 @@ to confirm nothing is still extractable. Image EXIF is dropped by default becaus
 hold a thumbnail of the unredacted picture (tested: OCR of the thumbnail recovered every
 redacted secret). Do not replace any of this with a drawn overlay.
 
+## Testing
+Run `.venv/bin/python tests/run_all.py` before committing (dev deps: `requirements-dev.txt`;
+OCR tests need the tesseract binary). The README lists known gaps and a test roadmap. When a
+test finds a bug, fix it and keep the test. Do not chase perfection: the suite is meant to be
+"pretty good".
+
 ## Conventions
 - Never put real client names in the repo; use "Acme Corp" in examples and tests.
 - Tests use fake data only.

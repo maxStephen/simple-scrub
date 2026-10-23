@@ -426,11 +426,27 @@ def _load_terms_file(path: Path) -> list[str]:
 
 
 class TxtHandler(FileHandler):
+    """Works on bytes so the file's encoding, BOM and line endings are preserved."""
+
     def scrub(self, input_path, output_path, sc):
-        scrubbed, count = sc.scrub_text(input_path.read_text(), input_path.name)
+        raw = input_path.read_bytes()
+        encoding = self._encoding(raw)
+        scrubbed, count = sc.scrub_text(raw.decode(encoding), input_path.name)
         if not sc.dry_run:
-            output_path.write_text(scrubbed)
+            output_path.write_bytes(scrubbed.encode(encoding))
         return count
+
+    @staticmethod
+    def _encoding(raw: bytes) -> str:
+        if raw.startswith((b"\xff\xfe", b"\xfe\xff")):
+            return "utf-16"  # the codec re-writes the BOM
+        if raw.startswith(b"\xef\xbb\xbf"):
+            return "utf-8-sig"
+        try:
+            raw.decode("utf-8")
+            return "utf-8"
+        except UnicodeDecodeError:
+            return "latin-1"  # maps every byte, so the round trip is lossless
 
 
 class ImageHandler(FileHandler):
@@ -931,7 +947,12 @@ def main():
         output_dir.mkdir(parents=True, exist_ok=True)
         output_path = _unique_output_path(output_path)
 
-    handler.scrub(input_path, output_path, sc)
+    try:
+        handler.scrub(input_path, output_path, sc)
+    except Exception as exc:  # corrupt, truncated or unreadable input
+        if not args.dry_run and output_path.exists():
+            output_path.unlink()
+        die(f"could not process {input_path.name}: {type(exc).__name__}: {exc}")
 
     total = sum(sc.counts.values())
     if args.dry_run:
