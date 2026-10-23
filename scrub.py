@@ -32,6 +32,8 @@ IPV4_RE = re.compile(r"(?<![\w.])\d{1,3}(?:\.\d{1,3}){3}(?!\d)")
 IPV6_RE = re.compile(r"(?<![\w:.])(?:[0-9A-Fa-f]{0,4}:){2,7}[0-9A-Fa-f]{0,4}(?![\w:])")
 NUMBER_RE = re.compile(r"(?<![\w.])\d(?:[ -]?\d){12,}(?!\w|\.\d)")
 # Dotted quads that are really versions: "version 1.2.3.4", "pkg>=1.2.3.4"
+# PCI DSS requirement numbers (10.2.1.1, 3.5.1.2): four parts, each 1-12, never 0.
+PCI_NUMBER_RE = re.compile(r"(?:[1-9]|1[0-2])(?:\.(?:[1-9]|1[0-2])){3}")
 VERSION_PREFIX_RE = re.compile(
     r"(?:\b(?:ver|version|rev|revision|release|build)\b\.?:?\s*|==|>=|<=|~=|!=|~>|\^|<|>)\s*$",
     re.IGNORECASE,
@@ -64,6 +66,8 @@ class Scrubber:
         ids: bool = True,
         min_id_length: int = 24,
         keep: list[str] | None = None,
+        keep_pci: bool = False,
+        keep_exif: bool = False,
         dry_run: bool = False,
         strip_metadata: bool = False,
     ):
@@ -76,6 +80,8 @@ class Scrubber:
         self.ids = ids
         self.min_id_length = min_id_length
         self.keep = [k.lower() for k in (keep or [])]
+        self.keep_pci = keep_pci
+        self.keep_exif = keep_exif
         self.dry_run = dry_run
         self.strip_metadata = strip_metadata
         self.id_re = re.compile(
@@ -84,6 +90,9 @@ class Scrubber:
         self.findings: list[tuple[str, str, str]] = []  # (kind, text, where)
         self.counts: Counter = Counter()
         self.warnings: list[str] = []
+        self.kept: set[str] = set()  # detected but allow-listed, for the report
+        self.needles: set[str] = set()  # strings redacted from PDF text, re-checked after save
+        self.originals: list[bytes] = []  # encoded originals of replaced PDF images
 
     # -- bookkeeping -------------------------------------------------------
 
@@ -121,15 +130,21 @@ class Scrubber:
         for start, end, _prio, kind, repl in sorted(cands, key=lambda c: (c[0], c[2], -c[1])):
             if start < last_end:
                 continue
-            if kind != "term" and self._is_kept(text[start:end]):
+            if kind != "term" and self._is_kept(text[start:end], kind):
                 continue
             spans.append(Span(start, end, kind, repl))
             last_end = end
         return spans
 
-    def _is_kept(self, matched: str) -> bool:
+    def _is_kept(self, matched: str, kind: str) -> bool:
         m = matched.lower()
-        return any(fnmatch.fnmatchcase(m, pattern) for pattern in self.keep)
+        kept = any(fnmatch.fnmatchcase(m, pattern) for pattern in self.keep) or (
+            self.keep_pci and kind == "ip" and PCI_NUMBER_RE.fullmatch(matched) is not None
+            and len(set(matched.split("."))) > 1  # 8.8.8.8 / 1.1.1.1 are DNS servers, not requirements
+        )
+        if kept:
+            self.kept.add(matched)
+        return kept
 
     def _ip_candidates(self, text: str) -> list[tuple[int, int, int, str, str]]:
         out = []
@@ -367,11 +382,13 @@ def _scrub_image_bytes(data: bytes, sc: Scrubber, where: str) -> bytes | None:
                 sc.warn(f"{where}: animated/multi-frame image not scrubbed")
                 return None
             fmt = img.format
+            has_exif = bool(img.info.get("exif"))
             out, count = redact_image(img, sc, where)
     except Exception as exc:
         sc.warn(f"{where}: could not process image ({exc})")
         return None
-    if not count and not sc.strip_metadata:
+    drop_exif = has_exif and not sc.keep_exif
+    if not count and not sc.strip_metadata and not drop_exif:
         return None
     buf = io.BytesIO()
     kwargs = {"quality": 95} if fmt == "JPEG" else {}
@@ -425,14 +442,18 @@ class ImageHandler(FileHandler):
                 sc.warn(f"{input_path.name}: multi-frame image, only the first frame was scrubbed")
             fmt = img.format
             extras = {}
-            if not sc.strip_metadata:
-                for key in ("exif", "icc_profile"):
-                    if img.info.get(key):
-                        extras[key] = img.info[key]
+            # EXIF can embed a thumbnail of the original, unredacted picture.
+            keep_exif = sc.keep_exif and not sc.strip_metadata
+            for key in ("exif", "icc_profile"):
+                if img.info.get(key) and (key != "exif" or keep_exif):
+                    if key == "icc_profile" and sc.strip_metadata:
+                        continue
+                    extras[key] = img.info[key]
+            drop_exif = bool(img.info.get("exif")) and not keep_exif
             out, count = redact_image(img, sc, input_path.name)
         if sc.dry_run:
             return count
-        if not count and not sc.strip_metadata:
+        if not count and not sc.strip_metadata and not drop_exif:
             shutil.copyfile(input_path, output_path)
             return 0
         if fmt == "JPEG":
@@ -480,7 +501,22 @@ class PdfHandler(FileHandler):
                 except TypeError:
                     doc.scrub()
             doc.save(str(output_path), garbage=3, deflate=True)
+            self._verify(pm, output_path, sc)
         return count
+
+    def _verify(self, pm, output_path, sc):
+        """Re-open the saved PDF and confirm nothing redacted is still recoverable."""
+        data = Path(output_path).read_bytes()
+        if any(blob in data for blob in sc.originals):
+            sc.warn("original (unredacted) image data is still present in the output PDF")
+        out = pm.open(str(output_path))
+        haystack = "\n".join(
+            [page.get_text() for page in out]
+            + [out.get_xml_metadata() or "", " ".join(str(v) for v in (out.metadata or {}).values())]
+        ).lower()
+        for needle in sorted(sc.needles):
+            if needle.lower() in haystack:
+                sc.warn(f"redacted text {needle[:8]!r}… is still extractable from the output PDF")
 
     def _metadata(self, doc, sc):
         count = 0
@@ -526,17 +562,20 @@ class PdfHandler(FileHandler):
                 img.load()
                 if min(img.size) < 24:
                     return 0
+                has_exif = bool(img.info.get("exif"))
                 out, count = redact_image(img, sc, where)
         except Exception as exc:
             sc.warn(f"{where} (xref {xref}): could not decode image ({exc})")
             return 0
-        if count and not sc.dry_run:
+        if (count or (has_exif and not sc.keep_exif)) and not sc.dry_run:
             buf = io.BytesIO()
             if info["ext"] in ("jpg", "jpeg"):
                 out.convert("RGB").save(buf, format="JPEG", quality=92)
             else:
                 out.save(buf, format="PNG")
             page.replace_image(xref, stream=buf.getvalue())
+            if info["ext"] in ("jpg", "jpeg"):
+                sc.originals.append(info["image"])
         return count
 
     def _text(self, pm, page, sc):
@@ -548,6 +587,7 @@ class PdfHandler(FileHandler):
                 targets.setdefault(text[sp.start:sp.end], (sp.kind, sp.repl))
 
         count = 0
+        sc.needles.update(targets)
         for needle, (kind, repl) in targets.items():
             try:
                 rects = page.search_for(needle, hit_max=1000)
@@ -823,6 +863,17 @@ def main():
              "(case-insensitive, * and ? wildcards, repeatable). Does not apply to --scrub terms.",
     )
     parser.add_argument(
+        "--keep-pci",
+        action="store_true",
+        help="Do not scrub dotted numbers shaped like PCI requirement numbers "
+             "(four parts, each 1-12, e.g. 10.2.1.1). 10.0.0.1 and 192.168.1.1 are still scrubbed",
+    )
+    parser.add_argument(
+        "--keep-exif",
+        action="store_true",
+        help="Keep image EXIF data (dropped by default: it can embed a thumbnail of the unredacted image)",
+    )
+    parser.add_argument(
         "--strip-metadata",
         action="store_true",
         help="Also remove document properties, authors, EXIF and embedded files",
@@ -862,6 +913,8 @@ def main():
         ids=not args.no_ids,
         min_id_length=args.min_id_length,
         keep=args.keep,
+        keep_pci=args.keep_pci,
+        keep_exif=args.keep_exif,
         dry_run=args.dry_run,
         strip_metadata=args.strip_metadata,
     )
@@ -886,6 +939,8 @@ def main():
         print(f"Would write:          {output_path}")
         for kind, text, where in sc.findings:
             print(f"  {kind:<7} {text!r}  ({where})")
+        for text in sorted(sc.kept):
+            print(f"  kept    {text!r}  (allow-listed, not scrubbed)")
     else:
         print(f"Wrote:                {output_path}")
     print(f"Terms scrubbed:       {len(sc.terms)}")
@@ -895,6 +950,8 @@ def main():
         f"numbers {sc.counts['number']}, IDs {sc.counts['id']})"
     )
     print(f"Filename changed:     {scrubbed_name != input_path.name}")
+    if sc.kept:
+        print(f"Kept (allow-listed):  {len(sc.kept)} distinct matches" + ("" if args.dry_run else " (use --dry-run to list)"))
 
     if sc.warnings:
         print("\nWARNINGS — review before sharing:", file=sys.stderr)

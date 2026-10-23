@@ -46,7 +46,9 @@ Automatic detection is on by default, so `--scrub`/`--terms` are optional. `--sc
 | `--no-ip` / `--no-numbers` / `--no-ids` | Turn off one automatic detector |
 | `--min-id-length N` | Minimum length of a machine-style ID (default: 24) |
 | `--keep PATTERN` | Never auto-scrub a detected match that fits the pattern (repeatable; `*`/`?` wildcards, case-insensitive). Does not apply to `--scrub` terms |
-| `--strip-metadata` | Also remove document properties, author names, EXIF, embedded files and zip timestamps |
+| `--keep-pci` | Never scrub dotted numbers shaped like PCI requirement numbers (four parts, each 1–12, e.g. `10.2.1.1`, `3.5.1.2`). `10.0.0.1`, `192.168.1.1` and all-equal quads like `8.8.8.8` are still scrubbed |
+| `--keep-exif` | Keep image EXIF data. Dropped by default because EXIF can embed a thumbnail of the unredacted picture |
+| `--strip-metadata` | Also remove document properties, author names, ICC profiles, embedded files and zip timestamps |
 | `--dry-run` | List what would be scrubbed; write nothing |
 
 ## Examples
@@ -68,7 +70,10 @@ python3 scrub.py screenshot.png --scrub "Acme Corp"
 python3 scrub.py notes.txt
 
 # PCI requirement numbers like 10.2.1.1 look like IPs; protect them
-python3 scrub.py matrix.pdf --keep "10.2.*" --keep "11.*"
+python3 scrub.py matrix.pdf --keep-pci
+
+# Or protect a specific range yourself
+python3 scrub.py matrix.pdf --keep "10.2.*"
 ```
 
 ## Terms file format
@@ -86,7 +91,7 @@ secret@email.com
 - **Readable identifiers**, such as `MaximumConnectionTimeoutValue` or `authentication-and-authorization-guidelines`, are not treated as IDs. In a URL path only the ID-like segment is scrubbed.
 - Numbers shorter than 13 digits, and decimals like `3.14159265358979`.
 
-A bare dotted quad with no context (`10.2.1.1`, `1.2.3.4` alone in a spreadsheet cell) is indistinguishable from an IP and **will** be scrubbed. Use `--dry-run` to see, and `--keep` to protect numbering schemes.
+A bare dotted quad with no context (`10.2.1.1`, `1.2.3.4` alone in a spreadsheet cell) is indistinguishable from an IP and **will** be scrubbed. Use `--dry-run` to see (it also lists anything allow-listed), `--keep-pci` for PCI requirement numbering, and `--keep` for other schemes. `--keep-pci` can still protect a real address whose parts are all 1–12 (such as `10.1.2.3`), so check the dry-run list.
 
 ## Exit status and warnings
 
@@ -97,6 +102,7 @@ The tool exits `2` and prints a `WARNINGS` block when it knows something may hav
 - an Office file contains embedded objects (`embeddings/`, `.bin`) that cannot be scrubbed
 - one of your `--scrub` terms is still present somewhere in an Office file after scrubbing (sheet names and formulas are not rewritten, since renaming them would break the workbook)
 - a PDF has annotations, form fields or embedded files that are not scrubbed
+- **post-save check failed:** after writing a PDF the tool re-opens it and warns if any redacted text is still extractable (page text, metadata, XMP) or if the original bytes of a replaced JPEG are still in the file
 
 Treat a warning as "review before sharing." Exit `0` means nothing was flagged, not that OCR cannot have missed something.
 
@@ -108,7 +114,7 @@ Treat a warning as "review before sharing." Exit `0` means nothing was flagged, 
 - Opaque printer settings blobs (`printerSettings*.bin`) inside Office files are left as is.
 - Faces, logos and handwriting are not detected.
 - Macro-enabled (`.docm`/`.xlsm`/`.pptm`), legacy (`.doc`/`.xls`/`.ppt`) and password-protected files are not supported.
-- Metadata (PDF info + XMP, Office properties) is scrubbed for your named terms by default; use `--strip-metadata` to remove it entirely. Image EXIF is kept unless `--strip-metadata` is set.
+- Metadata (PDF info + XMP, Office properties) is scrubbed for your named terms by default; use `--strip-metadata` to remove it entirely. Image EXIF is dropped by default (see `--keep-exif`).
 
 ## Output
 
@@ -134,6 +140,12 @@ Filename changed:     True
 ```
 
 ## Changelog
+
+### v0.4.0
+
+- `--keep-pci` protects PCI requirement numbers from the IP detector; `--dry-run` now lists allow-listed matches.
+- Image EXIF is dropped by default (it can embed an unredacted thumbnail); `--keep-exif` opts back in.
+- PDFs are re-opened after saving and checked for recoverable redacted text and leftover original image data.
 
 ### v0.3.0
 

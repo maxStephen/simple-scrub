@@ -24,8 +24,15 @@ user-supplied `--scrub` terms or IP addresses; those should match fully.
 
 ## Known ambiguity
 Dotted quads such as PCI requirement numbers (10.2.1.1) are valid IPv4 and cannot
-be told apart by pattern. Users handle this with `--dry-run` and `--keep`.
+be told apart by pattern. Users handle this with `--dry-run`, `--keep-pci` (parts all 1-12, not all-equal) and `--keep`.
 Version strings (v1.2.3.4, 1.2.3.4-beta, >=1.2.3.4) must stay intact.
+
+## Machine-readable, not just visual
+Scrubbing must remove content, not cover it. PDF text is deleted by `apply_redactions`,
+images are re-encoded with the pixels overwritten, and PDFs are re-opened after saving
+to confirm nothing is still extractable. Image EXIF is dropped by default because it can
+hold a thumbnail of the unredacted picture (tested: OCR of the thumbnail recovered every
+redacted secret). Do not replace any of this with a drawn overlay.
 
 ## Conventions
 - Never put real client names in the repo; use "Acme Corp" in examples and tests.

@@ -42,5 +42,16 @@ if "10.2.1.1" not in out or "10.9.9.9" in out:
     print("--keep not honoured:", out)
     failures += 1
 
+pci = scrub.Scrubber([], "dummy", keep_pci=True)
+out, _ = pci.scrub_text("req 10.2.1.1 3.5.1.2 12.10.7.1 | real 10.0.0.1 192.168.1.1 8.8.8.8 1.1.1.1 13.2.1.1")
+for kept in ("10.2.1.1", "3.5.1.2", "12.10.7.1"):
+    if kept not in out:
+        print("--keep-pci scrubbed a requirement number:", kept)
+        failures += 1
+for gone in ("10.0.0.1", "192.168.1.1", "8.8.8.8", "1.1.1.1", "13.2.1.1"):
+    if gone in out:
+        print("--keep-pci kept a real address:", gone)
+        failures += 1
+
 print("failures:", failures)
 sys.exit(1 if failures else 0)
